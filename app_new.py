@@ -1,6 +1,6 @@
 """
-Email Translation QA Tool - Streamlit UI (Advanced)
-Multi-language, multi-brand email comparison with side-by-side comparison and test tagging
+Email Translation QA Tool - Streamlit UI (Advanced with Email Viewer)
+Multi-language, multi-brand email comparison with side-by-side comparison, test tagging, and email viewer
 """
 
 import streamlit as st
@@ -14,6 +14,7 @@ from datetime import datetime
 from src.email_qa import (
     EMLParser, ExcelTranslationReader, SectionComparator, QAReportGenerator
 )
+from src.email_viewer import EmailViewer
 
 # Page config
 st.set_page_config(
@@ -49,6 +50,12 @@ st.markdown("""
         word-wrap: break-word;
         font-size: 0.85em;
     }
+    .email-viewer-frame {
+        border: 1px solid #ccc;
+        border-radius: 0.5em;
+        background-color: #f0f0f0;
+        padding: 0;
+    }
     .side-by-side {
         display: flex;
         gap: 2em;
@@ -74,7 +81,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<p class="header">📧 Email Translation QA Tool</p>', unsafe_allow_html=True)
-st.markdown("Compare multilingual email templates across brands and reservation types")
+st.markdown("Compare multilingual email templates across brands and reservation types with live email preview")
 
 # Initialize session state
 if 'uploaded_emails' not in st.session_state:
@@ -82,7 +89,7 @@ if 'uploaded_emails' not in st.session_state:
 if 'uploaded_excel' not in st.session_state:
     st.session_state.uploaded_excel = None
 if 'test_results' not in st.session_state:
-    st.session_state.test_results = []  # List of test objects with tags
+    st.session_state.test_results = []
 if 'test_counter' not in st.session_state:
     st.session_state.test_counter = 0
 
@@ -150,21 +157,21 @@ except Exception as e:
     st.stop()
 
 # ============================================================================
-# TAB 1: EMAIL & EXCEL PREVIEW WITH SECTION MAPPING
+# TAB 1: EMAIL VIEWER & EXCEL PREVIEW
 # ============================================================================
 
-tab1, tab2, tab3 = st.tabs(["📧 Email & Translation Preview", "🔍 Compare & Tag", "📊 Test Dashboard"])
+tab1, tab2, tab3 = st.tabs(["📧 Email Viewer & Preview", "🔍 Compare & Tag", "📊 Test Dashboard"])
 
 with tab1:
-    st.markdown('<p class="subheader">Step 1: Select Email & View Full Content</p>', unsafe_allow_html=True)
+    st.markdown('<p class="subheader">Email Viewer & Translation Base Preview</p>', unsafe_allow_html=True)
     
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        st.markdown("### Email Files")
+        st.markdown("### 📧 Email Files")
         email_names = [f.name for f in st.session_state.uploaded_emails]
         selected_email_idx = st.selectbox(
-            "Select email to preview",
+            "Select email to view",
             range(len(email_names)),
             format_func=lambda i: email_names[i],
             key="email_select"
@@ -175,30 +182,44 @@ with tab1:
             email_content = selected_email_file.read()
             
             try:
+                # Use EmailViewer to render email
+                viewer = EmailViewer(file_content=email_content)
                 parser = EMLParser(file_content=email_content)
+                
                 subject = parser.get_subject()
-                body = parser.get_body()
+                attachments = viewer.get_attachments_info()
                 
-                st.markdown(f"**Subject:** {subject}")
+                st.markdown(f"**File:** {selected_email_file.name}")
                 
-                st.markdown("### Full Email Content")
-                st.markdown('<div class="email-preview">' + body.replace("<", "&lt;").replace(">", "&gt;") + '</div>', unsafe_allow_html=True)
+                if attachments:
+                    st.markdown(f"**Attachments:** {len(attachments)} file(s)")
+                    for att in attachments:
+                        st.write(f"- {att['filename']} ({att['content_type']}, {att['size']} bytes)")
+                
+                st.markdown("---")
+                st.markdown("### Email Rendered View")
+                
+                # Display HTML email in iframe
+                email_html = viewer.get_full_html()
+                st.components.v1.html(email_html, height=700, scrolling=True)
                 
                 st.session_state.selected_email_content = {
                     'file_name': selected_email_file.name,
                     'subject': subject,
-                    'body': body,
                     'parser': parser,
-                    'sections': parser.extract_sections()
+                    'sections': parser.extract_sections(),
+                    'viewer': viewer
                 }
                 
             except Exception as e:
                 st.error(f"Error reading email: {e}")
+                import traceback
+                st.error(traceback.format_exc())
             
             selected_email_file.seek(0)
     
     with col2:
-        st.markdown("### Translation Base")
+        st.markdown("### 📋 Translation Base")
         selected_sheet = st.selectbox(
             "Select sheet to preview",
             sheet_names,
@@ -209,11 +230,15 @@ with tab1:
             try:
                 df = excel_reader.read_sheet(selected_sheet)
                 st.markdown(f"**Sheet:** {selected_sheet}")
-                st.markdown(f"**Columns:** {', '.join(df.columns.tolist())}")
-                st.markdown(f"**Total rows:** {len(df)}")
+                st.markdown(f"**Columns:** {len(df.columns)}")
+                st.markdown(f"**Rows:** {len(df)}")
+                
+                st.markdown("### Column Names")
+                for col in df.columns:
+                    st.write(f"- {col}")
                 
                 st.markdown("### Data Preview")
-                st.dataframe(df, use_container_width=True)
+                st.dataframe(df.head(10), use_container_width=True, height=400)
                 
                 st.session_state.excel_data = {
                     'sheet_name': selected_sheet,
@@ -228,10 +253,10 @@ with tab1:
 # ============================================================================
 
 with tab2:
-    st.markdown('<p class="subheader">Step 2: Compare Sections with Tags</p>', unsafe_allow_html=True)
+    st.markdown('<p class="subheader">Compare Sections with Tags</p>', unsafe_allow_html=True)
     
     if st.session_state.selected_email_content is None or st.session_state.excel_data is None:
-        st.warning("⚠️ Please select an email and translation sheet in the 'Email & Translation Preview' tab first")
+        st.warning("⚠️ Please select an email and translation sheet in the 'Email Viewer & Preview' tab first")
     else:
         email_data = st.session_state.selected_email_content
         excel_data = st.session_state.excel_data
@@ -572,10 +597,11 @@ st.markdown("---")
 st.markdown("### About")
 st.markdown("""
 **Email Translation QA Tool** helps you validate multilingual email templates by:
-1. **Preview** - View full emails and Excel translation sheets
-2. **Compare** - Select specific sections from email and Excel to compare
-3. **Tag** - Label tests with meaningful tags for organization
-4. **Dashboard** - View all tests with filtering, detailed comparison, and export options
+1. **View** - See emails as they render in an email client
+2. **Preview** - View Excel translation sheets
+3. **Compare** - Select specific sections from email and Excel to compare
+4. **Tag** - Label tests with meaningful tags for organization
+5. **Dashboard** - View all tests with filtering, detailed comparison, and export options
 
 Each test is saved with tags for easy filtering and reporting in the dashboard!
 """)
