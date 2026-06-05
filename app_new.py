@@ -1,6 +1,6 @@
 """
-Email Translation QA Tool - Streamlit UI (Revised)
-Multi-language, multi-brand email comparison interface with full email preview
+Email Translation QA Tool - Streamlit UI (Advanced)
+Multi-language, multi-brand email comparison with side-by-side comparison and test tagging
 """
 
 import streamlit as st
@@ -9,6 +9,7 @@ import tempfile
 import os
 from io import StringIO
 import json
+from datetime import datetime
 
 from src.email_qa import (
     EMLParser, ExcelTranslationReader, SectionComparator, QAReportGenerator
@@ -46,6 +47,28 @@ st.markdown("""
         font-family: monospace;
         white-space: pre-wrap;
         word-wrap: break-word;
+        font-size: 0.85em;
+    }
+    .side-by-side {
+        display: flex;
+        gap: 2em;
+    }
+    .comparison-column {
+        flex: 1;
+        border: 1px solid #ddd;
+        padding: 1em;
+        border-radius: 0.5em;
+        background-color: #fafafa;
+    }
+    .tag-badge {
+        display: inline-block;
+        background-color: #007bff;
+        color: white;
+        padding: 0.3em 0.6em;
+        border-radius: 0.25em;
+        font-size: 0.85em;
+        margin-right: 0.5em;
+        margin-bottom: 0.5em;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -58,12 +81,10 @@ if 'uploaded_emails' not in st.session_state:
     st.session_state.uploaded_emails = []
 if 'uploaded_excel' not in st.session_state:
     st.session_state.uploaded_excel = None
-if 'comparison_results' not in st.session_state:
-    st.session_state.comparison_results = []
-if 'selected_email_content' not in st.session_state:
-    st.session_state.selected_email_content = None
-if 'excel_data' not in st.session_state:
-    st.session_state.excel_data = None
+if 'test_results' not in st.session_state:
+    st.session_state.test_results = []  # List of test objects with tags
+if 'test_counter' not in st.session_state:
+    st.session_state.test_counter = 0
 
 # ============================================================================
 # SIDEBAR - FILE UPLOAD
@@ -132,7 +153,7 @@ except Exception as e:
 # TAB 1: EMAIL & EXCEL PREVIEW WITH SECTION MAPPING
 # ============================================================================
 
-tab1, tab2, tab3 = st.tabs(["📧 Email & Translation Preview", "🔍 Compare Sections", "📊 Results"])
+tab1, tab2, tab3 = st.tabs(["📧 Email & Translation Preview", "🔍 Compare & Tag", "📊 Test Dashboard"])
 
 with tab1:
     st.markdown('<p class="subheader">Step 1: Select Email & View Full Content</p>', unsafe_allow_html=True)
@@ -203,11 +224,11 @@ with tab1:
                 st.error(f"Error reading sheet: {e}")
 
 # ============================================================================
-# TAB 2: SECTION COMPARISON WITH MANUAL MAPPING
+# TAB 2: SIDE-BY-SIDE COMPARISON WITH TAGGING
 # ============================================================================
 
 with tab2:
-    st.markdown('<p class="subheader">Step 2: Map & Compare Email Sections</p>', unsafe_allow_html=True)
+    st.markdown('<p class="subheader">Step 2: Compare Sections with Tags</p>', unsafe_allow_html=True)
     
     if st.session_state.selected_email_content is None or st.session_state.excel_data is None:
         st.warning("⚠️ Please select an email and translation sheet in the 'Email & Translation Preview' tab first")
@@ -220,247 +241,326 @@ with tab2:
         st.markdown(f"**Translation Sheet:** {excel_data['sheet_name']}")
         st.divider()
         
-        # Show email sections
-        st.markdown("### Available Email Sections")
-        available_sections = list(email_data['sections'].keys())
-        st.info(f"Sections found: {', '.join(available_sections)}")
+        # ========== LEFT SECTION: SELECT EMAIL SECTION ==========
+        col1, col2 = st.columns([1, 1])
         
-        # Manual section mapping
-        st.markdown("### Manual Section Mapping")
-        st.markdown("Select which sections to compare from the email:")
+        with col1:
+            st.markdown("### 1️⃣ Select Email Section")
+            available_sections = list(email_data['sections'].keys())
+            
+            selected_email_section = st.selectbox(
+                "Choose section from email",
+                available_sections,
+                key="email_section_select",
+                help="Select which part of the email to compare"
+            )
+            
+            if selected_email_section:
+                email_section_content = email_data['sections'].get(selected_email_section, "")
+                st.markdown("**Preview:**")
+                st.markdown('<div class="email-preview">' + email_section_content[:500].replace("<", "&lt;").replace(">", "&gt;") + '</div>', unsafe_allow_html=True)
+                st.markdown(f"**Length:** {len(email_section_content)} characters")
         
-        # Create checkboxes for each section
-        sections_to_compare = {}
-        num_cols = 3
-        cols = st.columns(num_cols)
-        
-        for idx, section in enumerate(available_sections):
-            with cols[idx % num_cols]:
-                checked = st.checkbox(f"✓ {section}", value=True, key=f"section_{section}")
-                sections_to_compare[section] = checked
+        # ========== RIGHT SECTION: SELECT EXCEL SECTION ==========
+        with col2:
+            st.markdown("### 2️⃣ Select Excel Section")
+            
+            selected_excel_column = st.selectbox(
+                "Choose column from Excel",
+                options=excel_data['columns'],
+                key="excel_column_select",
+                help="Select which Excel column contains the expected content"
+            )
+            
+            selected_excel_row = st.selectbox(
+                "Choose row from Excel",
+                options=range(len(df)),
+                format_func=lambda i: f"Row {i+1}",
+                key="excel_row_select",
+                help="Select which row to compare against"
+            )
+            
+            if selected_excel_column and selected_excel_row is not None:
+                excel_section_content = str(df[selected_excel_column].iloc[selected_excel_row])
+                st.markdown("**Preview:**")
+                st.markdown('<div class="email-preview">' + excel_section_content[:500].replace("<", "&lt;").replace(">", "&gt;") + '</div>', unsafe_allow_html=True)
+                st.markdown(f"**Length:** {len(excel_section_content)} characters")
         
         st.divider()
         
-        # Column mapping
-        st.markdown("### Map Excel Columns to Section")
-        st.markdown("For each section selected above, specify which Excel columns contain the expected content:")
+        # ========== RUN COMPARISON ==========
+        st.markdown("### 3️⃣ Test Configuration & Tags")
         
-        column_mapping = {}
-        selected_sections = [s for s, checked in sections_to_compare.items() if checked]
+        col1, col2 = st.columns([2, 1])
         
-        for section in selected_sections:
-            col1, col2, col3 = st.columns([1, 2, 2])
+        with col1:
+            test_name = st.text_input(
+                "Test Name/Label",
+                value=f"{selected_email_section} vs {selected_excel_column}",
+                help="Give this comparison a meaningful name"
+            )
             
-            with col1:
-                st.write(f"**{section}**")
-            
-            with col2:
-                # Select which column contains this section's data
-                expected_col = st.selectbox(
-                    f"Expected content column for '{section}'",
-                    options=excel_data['columns'],
-                    key=f"expected_col_{section}"
-                )
-            
-            with col3:
-                # Optional: filter by specific row/criteria
-                filter_info = st.text_input(
-                    f"Filter (optional, e.g., Brand='The Standard')",
-                    key=f"filter_{section}",
-                    placeholder="Leave empty for all rows"
-                )
-            
-            column_mapping[section] = {
-                'expected_column': expected_col,
-                'filter': filter_info
-            }
+            test_tags = st.multiselect(
+                "Tags (for filtering in dashboard)",
+                options=[
+                    "Confirmation", "Check In", "Check Out", "Reservation", "Modification", "Reminder",
+                    "The Standard", "Breathless", "Standard X", "Me and All", "Andaz", "Thompson", "Dream",
+                    "Hero Section", "Reservation Module", "Contact Module", "WOH Module", "App Module", "Footer"
+                ],
+                help="Add tags to organize tests in the dashboard"
+            )
         
-        st.divider()
+        with col2:
+            st.write("### Run Test")
+            run_test = st.button("🚀 Run Comparison", use_container_width=True)
         
-        # Run comparison
-        if st.button("🚀 Compare Selected Sections", use_container_width=True):
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
+        if run_test:
             try:
                 comparator = SectionComparator(similarity_threshold=similarity_threshold)
-                all_results = []
                 
-                total_sections = len(column_mapping)
+                result = comparator.compare(
+                    expected=excel_section_content,
+                    actual=email_section_content,
+                    section_name=selected_email_section,
+                    language="en",
+                    brand="custom",
+                    reservation_type="custom",
+                    file_name=email_data['file_name']
+                )
                 
-                for idx, (section, mapping) in enumerate(column_mapping.items()):
-                    status_text.text(f"Comparing: {section}...")
-                    
-                    expected_col = mapping['expected_column']
-                    actual_content = email_data['sections'].get(section, "")
-                    
-                    # Get expected content from Excel
-                    if expected_col in df.columns:
-                        # For now, take first row (you can add filtering logic here)
-                        expected_content = str(df[expected_col].iloc[0]) if len(df) > 0 else ""
-                        
-                        result = comparator.compare(
-                            expected=expected_content,
-                            actual=actual_content,
-                            section_name=section,
-                            language="en",
-                            brand="selected",
-                            reservation_type="selected",
-                            file_name=email_data['file_name']
-                        )
-                        all_results.append(result)
-                    
-                    progress_bar.progress((idx + 1) / total_sections)
+                # Store test result with tags
+                test_result = {
+                    'id': st.session_state.test_counter,
+                    'timestamp': datetime.now().isoformat(),
+                    'test_name': test_name,
+                    'tags': test_tags,
+                    'email_file': email_data['file_name'],
+                    'email_section': selected_email_section,
+                    'excel_sheet': excel_data['sheet_name'],
+                    'excel_column': selected_excel_column,
+                    'excel_row': selected_excel_row,
+                    'result': result
+                }
                 
-                st.session_state.comparison_results = all_results
-                status_text.success("✓ Comparison complete!")
+                st.session_state.test_results.append(test_result)
+                st.session_state.test_counter += 1
                 
-                # Show results
+                st.success("✓ Test completed and saved to dashboard!")
+                
+                # ========== SIDE-BY-SIDE COMPARISON DISPLAY ==========
                 st.markdown("---")
-                st.markdown("### Comparison Results")
+                st.markdown("### 📊 Side-by-Side Comparison Result")
                 
-                passed = sum(1 for r in all_results if r.status == "PASS")
-                failed = sum(1 for r in all_results if r.status == "FAIL")
+                col1, col2 = st.columns([1, 1])
                 
-                col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric("Total", len(all_results))
+                    st.markdown("#### 📧 Email Section")
+                    st.markdown(f"**Section:** {selected_email_section}")
+                    st.markdown('<div class="email-preview">' + email_section_content.replace("<", "&lt;").replace(">", "&gt;") + '</div>', unsafe_allow_html=True)
+                
                 with col2:
-                    st.metric("✓ Passed", passed)
+                    st.markdown("#### 📋 Excel Section")
+                    st.markdown(f"**Column:** {selected_excel_column} | **Row:** {selected_excel_row + 1}")
+                    st.markdown('<div class="email-preview">' + excel_section_content.replace("<", "&lt;").replace(">", "&gt;") + '</div>', unsafe_allow_html=True)
+                
+                st.markdown("---")
+                
+                # Results metrics
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    status_text = "✓ PASS" if result.status == "PASS" else "✗ FAIL"
+                    st.metric("Status", status_text)
+                
+                with col2:
+                    st.metric("Similarity", f"{result.similarity * 100:.1f}%")
+                
                 with col3:
-                    st.metric("✗ Failed", failed)
+                    st.metric("Test Name", test_name[:20] + "..." if len(test_name) > 20 else test_name)
                 
-                st.divider()
+                with col4:
+                    if test_tags:
+                        st.write("**Tags:**")
+                        for tag in test_tags:
+                            st.markdown(f'<span class="tag-badge">{tag}</span>', unsafe_allow_html=True)
                 
-                # Detailed results
-                st.markdown("### Section-by-Section Results")
-                
-                for result in all_results:
-                    status_icon = "✓" if result.status == "PASS" else "✗"
-                    status_color = "pass" if result.status == "PASS" else "fail"
-                    
-                    with st.expander(
-                        f"{status_icon} {result.section_name} | "
-                        f"Similarity: {result.similarity * 100:.1f}%",
-                        expanded=result.status != "PASS"
-                    ):
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            st.markdown("**Expected (from Excel):**")
-                            st.code(result.expected, language="text")
-                        
-                        with col2:
-                            st.markdown("**Actual (from Email):**")
-                            st.code(result.actual, language="text")
-                        
-                        st.markdown(f"**Similarity Score:** {result.similarity * 100:.1f}%")
-                        st.markdown(f"**Status:** <span class='{status_color}'>{result.status}</span>", unsafe_allow_html=True)
-            
             except Exception as e:
-                st.error(f"Comparison error: {e}")
+                st.error(f"Error: {e}")
                 import traceback
                 st.error(traceback.format_exc())
 
 # ============================================================================
-# TAB 3: RESULTS & EXPORT
+# TAB 3: TEST DASHBOARD WITH FILTERING
 # ============================================================================
 
 with tab3:
-    st.markdown('<p class="subheader">Test Results & Export</p>', unsafe_allow_html=True)
+    st.markdown('<p class="subheader">Test Dashboard & Results</p>', unsafe_allow_html=True)
     
-    if not st.session_state.comparison_results:
-        st.info("Run comparison in the 'Compare Sections' tab first")
+    if not st.session_state.test_results:
+        st.info("💡 Run comparisons in the 'Compare & Tag' tab to see results here")
     else:
-        reporter = QAReportGenerator()
-        all_results = st.session_state.comparison_results
-        
-        passed = sum(1 for r in all_results if r.status == "PASS")
-        failed = sum(1 for r in all_results if r.status == "FAIL")
+        # Summary metrics
+        total_tests = len(st.session_state.test_results)
+        passed_tests = sum(1 for t in st.session_state.test_results if t['result'].status == "PASS")
+        failed_tests = sum(1 for t in st.session_state.test_results if t['result'].status == "FAIL")
         
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Total", len(all_results))
+            st.metric("Total Tests", total_tests)
         with col2:
-            st.metric("✓ Passed", passed)
+            st.metric("✓ Passed", passed_tests)
         with col3:
-            st.metric("✗ Failed", failed)
+            st.metric("✗ Failed", failed_tests)
         with col4:
-            pass_rate = (passed / len(all_results) * 100) if all_results else 0
+            pass_rate = (passed_tests / total_tests * 100) if total_tests > 0 else 0
             st.metric("Pass Rate", f"{pass_rate:.1f}%")
         
-        st.markdown("---")
+        st.divider()
+        
+        # Filter by tags
+        st.markdown("### Filter Results")
+        
+        all_tags = set()
+        for test in st.session_state.test_results:
+            all_tags.update(test['tags'])
+        
+        filter_tags = st.multiselect(
+            "Filter by tags",
+            sorted(list(all_tags)),
+            help="Select tags to filter the results"
+        )
+        
+        # Apply tag filter
+        filtered_tests = st.session_state.test_results
+        if filter_tags:
+            filtered_tests = [
+                t for t in st.session_state.test_results
+                if any(tag in t['tags'] for tag in filter_tags)
+            ]
+        
+        st.markdown(f"### Showing {len(filtered_tests)} test(s)")
+        
+        st.divider()
+        
+        # Display each test result
+        for test in filtered_tests:
+            result = test['result']
+            status_icon = "✓" if result.status == "PASS" else "✗"
+            status_color = "pass" if result.status == "PASS" else "fail"
+            
+            with st.expander(
+                f"{status_icon} {test['test_name']} | "
+                f"Similarity: {result.similarity * 100:.1f}% | "
+                f"📧 {test['email_file']}",
+                expanded=False
+            ):
+                col1, col2, col3 = st.columns([2, 1, 1])
+                
+                with col1:
+                    st.markdown("**Test Details:**")
+                    st.write(f"- **Test ID:** {test['id']}")
+                    st.write(f"- **Timestamp:** {test['timestamp']}")
+                    st.write(f"- **Email:** {test['email_file']}")
+                    st.write(f"- **Email Section:** {test['email_section']}")
+                    st.write(f"- **Excel Sheet:** {test['excel_sheet']}")
+                    st.write(f"- **Excel Column:** {test['excel_column']} (Row {test['excel_row'] + 1})")
+                
+                with col2:
+                    st.markdown("**Status:**")
+                    st.markdown(f'<span class="{status_color}">{result.status}</span>', unsafe_allow_html=True)
+                    st.write(f"Similarity: {result.similarity * 100:.1f}%")
+                
+                with col3:
+                    st.markdown("**Tags:**")
+                    if test['tags']:
+                        for tag in test['tags']:
+                            st.markdown(f'<span class="tag-badge">{tag}</span>', unsafe_allow_html=True)
+                    else:
+                        st.write("No tags")
+                
+                st.markdown("---")
+                
+                # Side-by-side view
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**Email Content:**")
+                    st.markdown('<div class="email-preview">' + result.actual[:800].replace("<", "&lt;").replace(">", "&gt;") + '</div>', unsafe_allow_html=True)
+                
+                with col2:
+                    st.markdown("**Expected (Excel) Content:**")
+                    st.markdown('<div class="email-preview">' + result.expected[:800].replace("<", "&lt;").replace(">", "&gt;") + '</div>', unsafe_allow_html=True)
+        
+        st.divider()
         
         # Export options
+        st.markdown("### Export Results")
+        
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            report_data = {
-                'total': len(all_results),
-                'passed': passed,
-                'failed': failed,
-                'pass_rate': f"{(passed / len(all_results) * 100) if all_results else 0:.1f}%",
-                'results': [
+            # Export as JSON
+            export_data = {
+                'summary': {
+                    'total': total_tests,
+                    'passed': passed_tests,
+                    'failed': failed_tests,
+                    'pass_rate': f"{(passed_tests / total_tests * 100) if total_tests > 0 else 0:.1f}%"
+                },
+                'tests': [
                     {
-                        'section': r.section_name,
-                        'language': r.language,
-                        'brand': r.brand,
-                        'reservation_type': r.reservation_type,
-                        'status': r.status,
-                        'similarity': f"{r.similarity * 100:.1f}%",
-                        'expected': r.expected,
-                        'actual': r.actual
+                        'id': t['id'],
+                        'test_name': t['test_name'],
+                        'timestamp': t['timestamp'],
+                        'tags': t['tags'],
+                        'email_file': t['email_file'],
+                        'email_section': t['email_section'],
+                        'excel_sheet': t['excel_sheet'],
+                        'excel_column': t['excel_column'],
+                        'status': t['result'].status,
+                        'similarity': f"{t['result'].similarity * 100:.1f}%"
                     }
-                    for r in all_results
+                    for t in filtered_tests
                 ]
             }
-            json_data = json.dumps(report_data, indent=2)
+            json_str = json.dumps(export_data, indent=2)
             st.download_button(
-                label="📥 Download JSON Report",
-                data=json_data,
-                file_name="qa_report.json",
+                label="📥 Download JSON",
+                data=json_str,
+                file_name=f"test_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                 mime="application/json"
             )
         
         with col2:
-            csv_data = pd.DataFrame([
+            # Export as CSV
+            export_df = pd.DataFrame([
                 {
-                    'Section': result.section_name,
-                    'Language': result.language,
-                    'Status': result.status,
-                    'Similarity': f"{result.similarity * 100:.1f}%"
+                    'Test ID': t['id'],
+                    'Test Name': t['test_name'],
+                    'Timestamp': t['timestamp'],
+                    'Tags': ', '.join(t['tags']),
+                    'Email File': t['email_file'],
+                    'Email Section': t['email_section'],
+                    'Excel Sheet': t['excel_sheet'],
+                    'Excel Column': t['excel_column'],
+                    'Status': t['result'].status,
+                    'Similarity': f"{t['result'].similarity * 100:.1f}%"
                 }
-                for result in all_results
-            ]).to_csv(index=False)
-            
+                for t in filtered_tests
+            ])
+            csv_str = export_df.to_csv(index=False)
             st.download_button(
-                label="📥 Download CSV Report",
-                data=csv_data,
-                file_name="qa_report.csv",
+                label="📥 Download CSV",
+                data=csv_str,
+                file_name=f"test_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv"
             )
         
         with col3:
-            if st.button("🔄 Clear Results", use_container_width=True):
-                st.session_state.comparison_results = []
+            if st.button("🔄 Clear All Results", use_container_width=True):
+                st.session_state.test_results = []
+                st.session_state.test_counter = 0
                 st.rerun()
-        
-        st.markdown("---")
-        
-        # All results table
-        st.markdown("### All Test Results")
-        results_df = pd.DataFrame([
-            {
-                'Section': r.section_name,
-                'Language': r.language,
-                'Status': r.status,
-                'Similarity': f"{r.similarity * 100:.1f}%",
-                'Expected': r.expected[:50] + "..." if len(r.expected) > 50 else r.expected,
-                'Actual': r.actual[:50] + "..." if len(r.actual) > 50 else r.actual,
-            }
-            for r in all_results
-        ])
-        st.dataframe(results_df, use_container_width=True)
 
 # Cleanup
 try:
@@ -472,11 +572,10 @@ st.markdown("---")
 st.markdown("### About")
 st.markdown("""
 **Email Translation QA Tool** helps you validate multilingual email templates by:
-1. **Uploading EML files** - Your email templates
-2. **Uploading Excel translations** - Your expected translation base
-3. **Manually selecting sections** - Choose which parts to compare
-4. **Mapping columns** - Link Excel columns to email sections
-5. **Viewing results** - See similarity scores and export reports
+1. **Preview** - View full emails and Excel translation sheets
+2. **Compare** - Select specific sections from email and Excel to compare
+3. **Tag** - Label tests with meaningful tags for organization
+4. **Dashboard** - View all tests with filtering, detailed comparison, and export options
 
-Supports all 9 brands and 6 reservation types!
+Each test is saved with tags for easy filtering and reporting in the dashboard!
 """)
