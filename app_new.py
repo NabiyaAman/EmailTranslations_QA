@@ -1,5 +1,5 @@
 """
-Email Translation QA Tool - Streamlit UI (Advanced with Email Viewer)
+Email Translation QA Tool - Streamlit UI (Advanced with Email Viewer & Mapping)
 Multi-language, multi-brand email comparison with side-by-side comparison, test tagging, and email viewer
 """
 
@@ -92,6 +92,8 @@ if 'test_results' not in st.session_state:
     st.session_state.test_results = []
 if 'test_counter' not in st.session_state:
     st.session_state.test_counter = 0
+if 'section_mappings' not in st.session_state:
+    st.session_state.section_mappings = {}
 
 # ============================================================================
 # SIDEBAR - FILE UPLOAD
@@ -157,10 +159,10 @@ except Exception as e:
     st.stop()
 
 # ============================================================================
-# TAB 1: EMAIL VIEWER & EXCEL PREVIEW
+# TAB 1: EMAIL VIEWER & EXCEL PREVIEW WITH MAPPING
 # ============================================================================
 
-tab1, tab2, tab3 = st.tabs(["📧 Email Viewer & Preview", "🔍 Compare & Tag", "📊 Test Dashboard"])
+tab1, tab2, tab3 = st.tabs(["📧 Email Viewer & Translation Data", "🔍 Map & Compare", "📊 Test Dashboard"])
 
 with tab1:
     st.markdown('<p class="subheader">Email Viewer & Translation Base Preview</p>', unsafe_allow_html=True)
@@ -230,15 +232,11 @@ with tab1:
             try:
                 df = excel_reader.read_sheet(selected_sheet)
                 st.markdown(f"**Sheet:** {selected_sheet}")
-                st.markdown(f"**Columns:** {len(df.columns)}")
-                st.markdown(f"**Rows:** {len(df)}")
-                
-                st.markdown("### Column Names")
-                for col in df.columns:
-                    st.write(f"- {col}")
+                st.markdown(f"**Total Columns:** {len(df.columns)}")
+                st.markdown(f"**Total Rows:** {len(df)}")
                 
                 st.markdown("### Data Preview")
-                st.dataframe(df.head(10), use_container_width=True, height=400)
+                st.dataframe(df, use_container_width=True, height=500)
                 
                 st.session_state.excel_data = {
                     'sheet_name': selected_sheet,
@@ -249,14 +247,14 @@ with tab1:
                 st.error(f"Error reading sheet: {e}")
 
 # ============================================================================
-# TAB 2: SIDE-BY-SIDE COMPARISON WITH TAGGING
+# TAB 2: MAP EMAIL SECTIONS TO EXCEL & COMPARE
 # ============================================================================
 
 with tab2:
-    st.markdown('<p class="subheader">Compare Sections with Tags</p>', unsafe_allow_html=True)
+    st.markdown('<p class="subheader">Map Email Sections to Excel Columns/Rows & Compare</p>', unsafe_allow_html=True)
     
     if st.session_state.selected_email_content is None or st.session_state.excel_data is None:
-        st.warning("⚠️ Please select an email and translation sheet in the 'Email Viewer & Preview' tab first")
+        st.warning("⚠️ Please select an email and translation sheet in the 'Email Viewer & Translation Data' tab first")
     else:
         email_data = st.session_state.selected_email_content
         excel_data = st.session_state.excel_data
@@ -266,63 +264,72 @@ with tab2:
         st.markdown(f"**Translation Sheet:** {excel_data['sheet_name']}")
         st.divider()
         
-        # ========== LEFT SECTION: SELECT EMAIL SECTION ==========
-        col1, col2 = st.columns([1, 1])
+        # ========== STEP 1: SELECT EMAIL SECTION ==========
+        st.markdown("### Step 1️⃣: Select Email Section to Map")
+        available_sections = list(email_data['sections'].keys())
+        
+        col1, col2 = st.columns([2, 1])
         
         with col1:
-            st.markdown("### 1️⃣ Select Email Section")
-            available_sections = list(email_data['sections'].keys())
-            
             selected_email_section = st.selectbox(
                 "Choose section from email",
                 available_sections,
-                key="email_section_select",
+                key="email_section_map",
                 help="Select which part of the email to compare"
             )
-            
-            if selected_email_section:
-                email_section_content = email_data['sections'].get(selected_email_section, "")
-                st.markdown("**Preview:**")
-                st.markdown('<div class="email-preview">' + email_section_content[:500].replace("<", "&lt;").replace(">", "&gt;") + '</div>', unsafe_allow_html=True)
-                st.markdown(f"**Length:** {len(email_section_content)} characters")
         
-        # ========== RIGHT SECTION: SELECT EXCEL SECTION ==========
         with col2:
-            st.markdown("### 2️⃣ Select Excel Section")
-            
+            st.write("")
+            st.write("")
+            st.markdown(f"**Content Length:** {len(email_data['sections'].get(selected_email_section, ''))} chars")
+        
+        if selected_email_section:
+            email_section_content = email_data['sections'].get(selected_email_section, "")
+            st.markdown("**Preview:**")
+            st.markdown('<div class="email-preview">' + email_section_content[:500].replace("<", "&lt;").replace(">", "&gt;") + '</div>', unsafe_allow_html=True)
+        
+        st.divider()
+        
+        # ========== STEP 2: SELECT EXCEL COLUMN & ROW ==========
+        st.markdown("### Step 2️⃣: Select Excel Column & Row to Map")
+        
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
             selected_excel_column = st.selectbox(
                 "Choose column from Excel",
                 options=excel_data['columns'],
-                key="excel_column_select",
-                help="Select which Excel column contains the expected content"
+                key="excel_column_map",
+                help="Select which Excel column contains the content to compare"
             )
-            
+        
+        with col2:
             selected_excel_row = st.selectbox(
                 "Choose row from Excel",
                 options=range(len(df)),
                 format_func=lambda i: f"Row {i+1}",
-                key="excel_row_select",
+                key="excel_row_map",
                 help="Select which row to compare against"
             )
-            
-            if selected_excel_column and selected_excel_row is not None:
-                excel_section_content = str(df[selected_excel_column].iloc[selected_excel_row])
-                st.markdown("**Preview:**")
-                st.markdown('<div class="email-preview">' + excel_section_content[:500].replace("<", "&lt;").replace(">", "&gt;") + '</div>', unsafe_allow_html=True)
-                st.markdown(f"**Length:** {len(excel_section_content)} characters")
+        
+        if selected_excel_column and selected_excel_row is not None:
+            excel_section_content = str(df[selected_excel_column].iloc[selected_excel_row])
+            st.markdown(f"**Content Length:** {len(excel_section_content)} chars")
+            st.markdown("**Preview:**")
+            st.markdown('<div class="email-preview">' + excel_section_content[:500].replace("<", "&lt;").replace(">", "&gt;") + '</div>', unsafe_allow_html=True)
         
         st.divider()
         
-        # ========== RUN COMPARISON ==========
-        st.markdown("### 3️⃣ Test Configuration & Tags")
+        # ========== STEP 3: TEST CONFIGURATION & LABELS ==========
+        st.markdown("### Step 3️⃣: Test Configuration & Labels")
         
         col1, col2 = st.columns([2, 1])
         
         with col1:
             test_name = st.text_input(
                 "Test Name/Label",
-                value=f"{selected_email_section} vs {selected_excel_column}",
-                help="Give this comparison a meaningful name"
+                value=f"{selected_email_section} → {selected_excel_column}",
+                help="Give this comparison a meaningful name for the dashboard"
             )
             
             test_tags = st.multiselect(
@@ -336,8 +343,8 @@ with tab2:
             )
         
         with col2:
-            st.write("### Run Test")
-            run_test = st.button("🚀 Run Comparison", use_container_width=True)
+            st.write("")
+            run_test = st.button("🚀 Create Comparison", use_container_width=True, key="create_comparison")
         
         if run_test:
             try:
@@ -348,12 +355,12 @@ with tab2:
                     actual=email_section_content,
                     section_name=selected_email_section,
                     language="en",
-                    brand="custom",
-                    reservation_type="custom",
+                    brand="mapped",
+                    reservation_type="mapped",
                     file_name=email_data['file_name']
                 )
                 
-                # Store test result with tags
+                # Store test result with tags and mapping info
                 test_result = {
                     'id': st.session_state.test_counter,
                     'timestamp': datetime.now().isoformat(),
@@ -363,29 +370,27 @@ with tab2:
                     'email_section': selected_email_section,
                     'excel_sheet': excel_data['sheet_name'],
                     'excel_column': selected_excel_column,
-                    'excel_row': selected_excel_row,
+                    'excel_row': selected_excel_row + 1,
                     'result': result
                 }
                 
                 st.session_state.test_results.append(test_result)
                 st.session_state.test_counter += 1
                 
-                st.success("✓ Test completed and saved to dashboard!")
+                st.success("✓ Comparison created and saved to dashboard!")
                 
                 # ========== SIDE-BY-SIDE COMPARISON DISPLAY ==========
                 st.markdown("---")
-                st.markdown("### 📊 Side-by-Side Comparison Result")
+                st.markdown("### 📊 Side-by-Side Comparison")
                 
                 col1, col2 = st.columns([1, 1])
                 
                 with col1:
-                    st.markdown("#### 📧 Email Section")
-                    st.markdown(f"**Section:** {selected_email_section}")
+                    st.markdown(f"#### 📧 Email Section: {selected_email_section}")
                     st.markdown('<div class="email-preview">' + email_section_content.replace("<", "&lt;").replace(">", "&gt;") + '</div>', unsafe_allow_html=True)
                 
                 with col2:
-                    st.markdown("#### 📋 Excel Section")
-                    st.markdown(f"**Column:** {selected_excel_column} | **Row:** {selected_excel_row + 1}")
+                    st.markdown(f"#### 📋 Excel Column: {selected_excel_column} (Row {selected_excel_row + 1})")
                     st.markdown('<div class="email-preview">' + excel_section_content.replace("<", "&lt;").replace(">", "&gt;") + '</div>', unsafe_allow_html=True)
                 
                 st.markdown("---")
@@ -401,7 +406,7 @@ with tab2:
                     st.metric("Similarity", f"{result.similarity * 100:.1f}%")
                 
                 with col3:
-                    st.metric("Test Name", test_name[:20] + "..." if len(test_name) > 20 else test_name)
+                    st.metric("Test Label", test_name[:20] + "..." if len(test_name) > 20 else test_name)
                 
                 with col4:
                     if test_tags:
@@ -410,7 +415,7 @@ with tab2:
                             st.markdown(f'<span class="tag-badge">{tag}</span>', unsafe_allow_html=True)
                 
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Error creating comparison: {e}")
                 import traceback
                 st.error(traceback.format_exc())
 
@@ -422,7 +427,7 @@ with tab3:
     st.markdown('<p class="subheader">Test Dashboard & Results</p>', unsafe_allow_html=True)
     
     if not st.session_state.test_results:
-        st.info("💡 Run comparisons in the 'Compare & Tag' tab to see results here")
+        st.info("💡 Create comparisons in the 'Map & Compare' tab to see results here")
     else:
         # Summary metrics
         total_tests = len(st.session_state.test_results)
@@ -488,7 +493,7 @@ with tab3:
                     st.write(f"- **Email:** {test['email_file']}")
                     st.write(f"- **Email Section:** {test['email_section']}")
                     st.write(f"- **Excel Sheet:** {test['excel_sheet']}")
-                    st.write(f"- **Excel Column:** {test['excel_column']} (Row {test['excel_row'] + 1})")
+                    st.write(f"- **Excel Column:** {test['excel_column']} (Row {test['excel_row']})")
                 
                 with col2:
                     st.markdown("**Status:**")
@@ -509,11 +514,11 @@ with tab3:
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    st.markdown("**Email Content:**")
+                    st.markdown(f"**Email Section: {test['email_section']}**")
                     st.markdown('<div class="email-preview">' + result.actual[:800].replace("<", "&lt;").replace(">", "&gt;") + '</div>', unsafe_allow_html=True)
                 
                 with col2:
-                    st.markdown("**Expected (Excel) Content:**")
+                    st.markdown(f"**Excel: {test['excel_column']} (Row {test['excel_row']})**")
                     st.markdown('<div class="email-preview">' + result.expected[:800].replace("<", "&lt;").replace(">", "&gt;") + '</div>', unsafe_allow_html=True)
         
         st.divider()
@@ -542,6 +547,7 @@ with tab3:
                         'email_section': t['email_section'],
                         'excel_sheet': t['excel_sheet'],
                         'excel_column': t['excel_column'],
+                        'excel_row': t['excel_row'],
                         'status': t['result'].status,
                         'similarity': f"{t['result'].similarity * 100:.1f}%"
                     }
@@ -568,6 +574,7 @@ with tab3:
                     'Email Section': t['email_section'],
                     'Excel Sheet': t['excel_sheet'],
                     'Excel Column': t['excel_column'],
+                    'Excel Row': t['excel_row'],
                     'Status': t['result'].status,
                     'Similarity': f"{t['result'].similarity * 100:.1f}%"
                 }
@@ -597,11 +604,11 @@ st.markdown("---")
 st.markdown("### About")
 st.markdown("""
 **Email Translation QA Tool** helps you validate multilingual email templates by:
-1. **View** - See emails as they render in an email client
-2. **Preview** - View Excel translation sheets
-3. **Compare** - Select specific sections from email and Excel to compare
-4. **Tag** - Label tests with meaningful tags for organization
-5. **Dashboard** - View all tests with filtering, detailed comparison, and export options
+1. **View** - See emails rendered as they appear in email clients
+2. **Select** - Preview Excel translation data
+3. **Map** - Select specific email sections and map them to Excel columns/rows
+4. **Compare** - Create side-by-side comparisons with custom labels and tags
+5. **Dashboard** - View all tests with filtering, sorting, and export options
 
-Each test is saved with tags for easy filtering and reporting in the dashboard!
+Each comparison creates a test result with custom labels and tags for easy organization and reporting!
 """)
