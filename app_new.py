@@ -1,6 +1,6 @@
 """
-Email Translation QA Tool - Streamlit UI
-Multi-language, multi-brand email comparison interface
+Email Translation QA Tool - Streamlit UI (Revised)
+Multi-language, multi-brand email comparison interface with full email preview
 """
 
 import streamlit as st
@@ -36,6 +36,17 @@ st.markdown("""
     .pass {color: #28a745; font-weight: bold;}
     .fail {color: #dc3545; font-weight: bold;}
     .missing {color: #ffc107; font-weight: bold;}
+    .email-preview {
+        border: 1px solid #ccc;
+        padding: 1em;
+        border-radius: 0.5em;
+        background-color: #f5f5f5;
+        max-height: 600px;
+        overflow-y: auto;
+        font-family: monospace;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -49,6 +60,10 @@ if 'uploaded_excel' not in st.session_state:
     st.session_state.uploaded_excel = None
 if 'comparison_results' not in st.session_state:
     st.session_state.comparison_results = []
+if 'selected_email_content' not in st.session_state:
+    st.session_state.selected_email_content = None
+if 'excel_data' not in st.session_state:
+    st.session_state.excel_data = None
 
 # ============================================================================
 # SIDEBAR - FILE UPLOAD
@@ -92,31 +107,6 @@ with st.sidebar:
         step=0.05,
         help="Minimum match score (0.0-1.0)"
     )
-    
-    st.divider()
-    
-    # Brand and Reservation Type filters
-    st.markdown("### Filters")
-    
-    brands = [
-        'The Standard', 'Breathless', 'Standard X',
-        'Me and All', 'Andaz', 'Thompson', 'Dream'
-    ]
-    selected_brands = st.multiselect(
-        "Filter by Brand",
-        brands,
-        default=brands
-    )
-    
-    reservation_types = [
-        'Confirmation', 'Check In', 'Check Out',
-        'Reservation', 'Modification', 'Reminder'
-    ]
-    selected_types = st.multiselect(
-        "Filter by Reservation Type",
-        reservation_types,
-        default=reservation_types
-    )
 
 # ============================================================================
 # MAIN CONTENT
@@ -139,179 +129,238 @@ except Exception as e:
     st.stop()
 
 # ============================================================================
-# TAB 1: UPLOAD & PREVIEW
+# TAB 1: EMAIL & EXCEL PREVIEW WITH SECTION MAPPING
 # ============================================================================
 
-tab1, tab2, tab3 = st.tabs(["📤 Upload & Preview", "🔍 Section Comparison", "📊 Results"])
+tab1, tab2, tab3 = st.tabs(["📧 Email & Translation Preview", "🔍 Compare Sections", "📊 Results"])
 
 with tab1:
-    st.markdown('<p class="subheader">Uploaded Emails & Translation Base Preview</p>', unsafe_allow_html=True)
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("### Uploaded Email Files")
-        for idx, email_file in enumerate(st.session_state.uploaded_emails, 1):
-            try:
-                parser = EMLParser(file_content=email_file.read())
-                subject = parser.get_subject()
-                
-                with st.expander(f"📧 {idx}. {email_file.name}", expanded=False):
-                    st.markdown(f"**Subject:** {subject}")
-                    
-                    sections = parser.extract_sections()
-                    st.markdown("**Sections Found:**")
-                    for section_name, content in sections.items():
-                        preview = content[:100] + "..." if len(content) > 100 else content
-                        st.markdown(f"- **{section_name}**: {preview}")
-                
-                email_file.seek(0)  # Reset file pointer
-            except Exception as e:
-                st.error(f"Error reading {email_file.name}: {e}")
-    
-    with col2:
-        st.markdown("### Translation Base Preview")
-        selected_sheet = st.selectbox("Select sheet to preview", sheet_names)
-        
-        if selected_sheet:
-            try:
-                df = excel_reader.read_sheet(selected_sheet)
-                st.dataframe(df.head(10), use_container_width=True)
-                st.markdown(f"**Total rows:** {len(df)}")
-            except Exception as e:
-                st.error(f"Error reading sheet: {e}")
-
-# ============================================================================
-# TAB 2: SECTION COMPARISON
-# ============================================================================
-
-with tab2:
-    st.markdown('<p class="subheader">Section-by-Section Comparison</p>', unsafe_allow_html=True)
+    st.markdown('<p class="subheader">Step 1: Select Email & View Full Content</p>', unsafe_allow_html=True)
     
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        selected_sheet = st.selectbox(
-            "Select translation sheet",
-            sheet_names,
-            key="comp_sheet"
+        st.markdown("### Email Files")
+        email_names = [f.name for f in st.session_state.uploaded_emails]
+        selected_email_idx = st.selectbox(
+            "Select email to preview",
+            range(len(email_names)),
+            format_func=lambda i: email_names[i],
+            key="email_select"
         )
+        
+        if selected_email_idx is not None:
+            selected_email_file = st.session_state.uploaded_emails[selected_email_idx]
+            email_content = selected_email_file.read()
+            
+            try:
+                parser = EMLParser(file_content=email_content)
+                subject = parser.get_subject()
+                body = parser.get_body()
+                
+                st.markdown(f"**Subject:** {subject}")
+                
+                st.markdown("### Full Email Content")
+                st.markdown('<div class="email-preview">' + body.replace("<", "&lt;").replace(">", "&gt;") + '</div>', unsafe_allow_html=True)
+                
+                st.session_state.selected_email_content = {
+                    'file_name': selected_email_file.name,
+                    'subject': subject,
+                    'body': body,
+                    'parser': parser,
+                    'sections': parser.extract_sections()
+                }
+                
+            except Exception as e:
+                st.error(f"Error reading email: {e}")
+            
+            selected_email_file.seek(0)
     
     with col2:
-        run_comparison = st.button("🚀 Run Comparison", use_container_width=True)
+        st.markdown("### Translation Base")
+        selected_sheet = st.selectbox(
+            "Select sheet to preview",
+            sheet_names,
+            key="sheet_select"
+        )
+        
+        if selected_sheet:
+            try:
+                df = excel_reader.read_sheet(selected_sheet)
+                st.markdown(f"**Sheet:** {selected_sheet}")
+                st.markdown(f"**Columns:** {', '.join(df.columns.tolist())}")
+                st.markdown(f"**Total rows:** {len(df)}")
+                
+                st.markdown("### Data Preview")
+                st.dataframe(df, use_container_width=True)
+                
+                st.session_state.excel_data = {
+                    'sheet_name': selected_sheet,
+                    'dataframe': df,
+                    'columns': df.columns.tolist()
+                }
+            except Exception as e:
+                st.error(f"Error reading sheet: {e}")
+
+# ============================================================================
+# TAB 2: SECTION COMPARISON WITH MANUAL MAPPING
+# ============================================================================
+
+with tab2:
+    st.markdown('<p class="subheader">Step 2: Map & Compare Email Sections</p>', unsafe_allow_html=True)
     
-    if run_comparison:
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+    if st.session_state.selected_email_content is None or st.session_state.excel_data is None:
+        st.warning("⚠️ Please select an email and translation sheet in the 'Email & Translation Preview' tab first")
+    else:
+        email_data = st.session_state.selected_email_content
+        excel_data = st.session_state.excel_data
+        df = excel_data['dataframe']
         
-        try:
-            comparator = SectionComparator(similarity_threshold=similarity_threshold)
-            reporter = QAReportGenerator()
-            all_results = []
+        st.markdown(f"**Email:** {email_data['file_name']}")
+        st.markdown(f"**Translation Sheet:** {excel_data['sheet_name']}")
+        st.divider()
+        
+        # Show email sections
+        st.markdown("### Available Email Sections")
+        available_sections = list(email_data['sections'].keys())
+        st.info(f"Sections found: {', '.join(available_sections)}")
+        
+        # Manual section mapping
+        st.markdown("### Manual Section Mapping")
+        st.markdown("Select which sections to compare from the email:")
+        
+        # Create checkboxes for each section
+        sections_to_compare = {}
+        num_cols = 3
+        cols = st.columns(num_cols)
+        
+        for idx, section in enumerate(available_sections):
+            with cols[idx % num_cols]:
+                checked = st.checkbox(f"✓ {section}", value=True, key=f"section_{section}")
+                sections_to_compare[section] = checked
+        
+        st.divider()
+        
+        # Column mapping
+        st.markdown("### Map Excel Columns to Section")
+        st.markdown("For each section selected above, specify which Excel columns contain the expected content:")
+        
+        column_mapping = {}
+        selected_sections = [s for s, checked in sections_to_compare.items() if checked]
+        
+        for section in selected_sections:
+            col1, col2, col3 = st.columns([1, 2, 2])
             
-            excel_reader_comp = ExcelTranslationReader(excel_path)
-            translations = excel_reader_comp.get_translations_by_brand_and_type(selected_sheet)
-            
-            total_emails = len(st.session_state.uploaded_emails)
-            
-            for email_idx, email_file in enumerate(st.session_state.uploaded_emails):
-                status_text.text(f"Processing: {email_file.name}...")
-                
-                try:
-                    parser = EMLParser(file_content=email_file.read())
-                    email_sections = parser.extract_sections()
-                    file_name = email_file.name
-                    
-                    # For each section, compare against translations
-                    for section_name, actual_content in email_sections.items():
-                        for brand in selected_brands:
-                            for res_type in selected_types:
-                                # Create key to look up in translations
-                                key = f"{section_name}_{brand}_{res_type}_en"
-                                expected_content = translations.get(key, "")
-                                
-                                if expected_content:
-                                    result = comparator.compare(
-                                        expected=expected_content,
-                                        actual=actual_content,
-                                        section_name=section_name,
-                                        language="en",
-                                        brand=brand,
-                                        reservation_type=res_type,
-                                        file_name=file_name
-                                    )
-                                    all_results.append(result)
-                    
-                    email_file.seek(0)
-                
-                except Exception as e:
-                    st.warning(f"Error processing {email_file.name}: {e}")
-                
-                progress_bar.progress((email_idx + 1) / total_emails)
-            
-            st.session_state.comparison_results = all_results
-            status_text.success("✓ Comparison complete!")
-            
-            # Show summary
-            report = reporter.generate_detailed_report(all_results)
-            
-            st.markdown("---")
-            col1, col2, col3, col4, col5 = st.columns(5)
             with col1:
-                st.metric("Total Tests", report['total'])
+                st.write(f"**{section}**")
+            
             with col2:
-                st.metric("✓ Passed", report['passed'])
+                # Select which column contains this section's data
+                expected_col = st.selectbox(
+                    f"Expected content column for '{section}'",
+                    options=excel_data['columns'],
+                    key=f"expected_col_{section}"
+                )
+            
             with col3:
-                st.metric("✗ Failed", report['failed'])
-            with col4:
-                st.metric("⊘ Missing", report['missing'])
-            with col5:
-                st.metric("Pass Rate", report['pass_rate'])
+                # Optional: filter by specific row/criteria
+                filter_info = st.text_input(
+                    f"Filter (optional, e.g., Brand='The Standard')",
+                    key=f"filter_{section}",
+                    placeholder="Leave empty for all rows"
+                )
             
-            st.markdown("---")
-            
-            # Detailed results per file
-            st.markdown("### Results by Email File")
-            
-            for file_report in report['files']:
-                with st.expander(
-                    f"📧 {file_report['file_name']} - "
-                    f"<span class='pass'>{file_report['passed']}</span>/"
-                    f"{file_report['total']}",
-                    expanded=False
-                ):
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Passed", file_report['passed'])
-                    with col2:
-                        st.metric("Failed", file_report['failed'])
-                    with col3:
-                        st.metric("Pass Rate", file_report['pass_rate'])
-                    
-                    st.markdown("#### Section Results")
-                    for section in file_report['sections']:
-                        status_color = "✓ pass" if section['status'] == "PASS" else "✗ fail" if section['status'] == "FAIL" else "⊘ missing"
-                        
-                        with st.expander(
-                            f"{section['section']} | {section['language']} | "
-                            f"{section['brand']} | {section['reservation_type']} | "
-                            f"{status_color} | {section['similarity']}",
-                            expanded=False
-                        ):
-                            col1, col2 = st.columns(2)
-                            
-                            with col1:
-                                st.markdown("**Expected:**")
-                                st.code(section['expected_preview'])
-                            
-                            with col2:
-                                st.markdown("**Actual:**")
-                                st.code(section['actual_preview'])
+            column_mapping[section] = {
+                'expected_column': expected_col,
+                'filter': filter_info
+            }
         
-        except Exception as e:
-            st.error(f"Comparison error: {e}")
-            import traceback
-            st.error(traceback.format_exc())
+        st.divider()
+        
+        # Run comparison
+        if st.button("🚀 Compare Selected Sections", use_container_width=True):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            try:
+                comparator = SectionComparator(similarity_threshold=similarity_threshold)
+                all_results = []
+                
+                total_sections = len(column_mapping)
+                
+                for idx, (section, mapping) in enumerate(column_mapping.items()):
+                    status_text.text(f"Comparing: {section}...")
+                    
+                    expected_col = mapping['expected_column']
+                    actual_content = email_data['sections'].get(section, "")
+                    
+                    # Get expected content from Excel
+                    if expected_col in df.columns:
+                        # For now, take first row (you can add filtering logic here)
+                        expected_content = str(df[expected_col].iloc[0]) if len(df) > 0 else ""
+                        
+                        result = comparator.compare(
+                            expected=expected_content,
+                            actual=actual_content,
+                            section_name=section,
+                            language="en",
+                            brand="selected",
+                            reservation_type="selected",
+                            file_name=email_data['file_name']
+                        )
+                        all_results.append(result)
+                    
+                    progress_bar.progress((idx + 1) / total_sections)
+                
+                st.session_state.comparison_results = all_results
+                status_text.success("✓ Comparison complete!")
+                
+                # Show results
+                st.markdown("---")
+                st.markdown("### Comparison Results")
+                
+                passed = sum(1 for r in all_results if r.status == "PASS")
+                failed = sum(1 for r in all_results if r.status == "FAIL")
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total", len(all_results))
+                with col2:
+                    st.metric("✓ Passed", passed)
+                with col3:
+                    st.metric("✗ Failed", failed)
+                
+                st.divider()
+                
+                # Detailed results
+                st.markdown("### Section-by-Section Results")
+                
+                for result in all_results:
+                    status_icon = "✓" if result.status == "PASS" else "✗"
+                    status_color = "pass" if result.status == "PASS" else "fail"
+                    
+                    with st.expander(
+                        f"{status_icon} {result.section_name} | "
+                        f"Similarity: {result.similarity * 100:.1f}%",
+                        expanded=result.status != "PASS"
+                    ):
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.markdown("**Expected (from Excel):**")
+                            st.code(result.expected, language="text")
+                        
+                        with col2:
+                            st.markdown("**Actual (from Email):**")
+                            st.code(result.actual, language="text")
+                        
+                        st.markdown(f"**Similarity Score:** {result.similarity * 100:.1f}%")
+                        st.markdown(f"**Status:** <span class='{status_color}'>{result.status}</span>", unsafe_allow_html=True)
+            
+            except Exception as e:
+                st.error(f"Comparison error: {e}")
+                import traceback
+                st.error(traceback.format_exc())
 
 # ============================================================================
 # TAB 3: RESULTS & EXPORT
@@ -321,23 +370,24 @@ with tab3:
     st.markdown('<p class="subheader">Test Results & Export</p>', unsafe_allow_html=True)
     
     if not st.session_state.comparison_results:
-        st.info("Run comparison in the 'Section Comparison' tab first")
+        st.info("Run comparison in the 'Compare Sections' tab first")
     else:
         reporter = QAReportGenerator()
-        report = reporter.generate_detailed_report(st.session_state.comparison_results)
+        all_results = st.session_state.comparison_results
         
-        # Summary metrics
-        col1, col2, col3, col4, col5 = st.columns(5)
+        passed = sum(1 for r in all_results if r.status == "PASS")
+        failed = sum(1 for r in all_results if r.status == "FAIL")
+        
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Total", report['total'])
+            st.metric("Total", len(all_results))
         with col2:
-            st.metric("Passed", report['passed'])
+            st.metric("✓ Passed", passed)
         with col3:
-            st.metric("Failed", report['failed'])
+            st.metric("✗ Failed", failed)
         with col4:
-            st.metric("Missing", report['missing'])
-        with col5:
-            st.metric("Pass Rate", report['pass_rate'])
+            pass_rate = (passed / len(all_results) * 100) if all_results else 0
+            st.metric("Pass Rate", f"{pass_rate:.1f}%")
         
         st.markdown("---")
         
@@ -345,7 +395,26 @@ with tab3:
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            json_data = json.dumps(report, indent=2)
+            report_data = {
+                'total': len(all_results),
+                'passed': passed,
+                'failed': failed,
+                'pass_rate': f"{(passed / len(all_results) * 100) if all_results else 0:.1f}%",
+                'results': [
+                    {
+                        'section': r.section_name,
+                        'language': r.language,
+                        'brand': r.brand,
+                        'reservation_type': r.reservation_type,
+                        'status': r.status,
+                        'similarity': f"{r.similarity * 100:.1f}%",
+                        'expected': r.expected,
+                        'actual': r.actual
+                    }
+                    for r in all_results
+                ]
+            }
+            json_data = json.dumps(report_data, indent=2)
             st.download_button(
                 label="📥 Download JSON Report",
                 data=json_data,
@@ -356,15 +425,12 @@ with tab3:
         with col2:
             csv_data = pd.DataFrame([
                 {
-                    'File': result.file_name,
                     'Section': result.section_name,
                     'Language': result.language,
-                    'Brand': result.brand,
-                    'Reservation Type': result.reservation_type,
                     'Status': result.status,
                     'Similarity': f"{result.similarity * 100:.1f}%"
                 }
-                for result in st.session_state.comparison_results
+                for result in all_results
             ]).to_csv(index=False)
             
             st.download_button(
@@ -380,26 +446,21 @@ with tab3:
                 st.rerun()
         
         st.markdown("---")
-        st.markdown("### Failed Tests Summary")
         
-        failed_results = [r for r in st.session_state.comparison_results if r.status != "PASS"]
-        
-        if failed_results:
-            failed_df = pd.DataFrame([
-                {
-                    'File': r.file_name,
-                    'Section': r.section_name,
-                    'Brand': r.brand,
-                    'Type': r.reservation_type,
-                    'Similarity': f"{r.similarity * 100:.1f}%",
-                    'Expected': r.expected[:50] + "..." if len(r.expected) > 50 else r.expected,
-                    'Actual': r.actual[:50] + "..." if len(r.actual) > 50 else r.actual,
-                }
-                for r in failed_results
-            ])
-            st.dataframe(failed_df, use_container_width=True)
-        else:
-            st.success("🎉 All tests passed!")
+        # All results table
+        st.markdown("### All Test Results")
+        results_df = pd.DataFrame([
+            {
+                'Section': r.section_name,
+                'Language': r.language,
+                'Status': r.status,
+                'Similarity': f"{r.similarity * 100:.1f}%",
+                'Expected': r.expected[:50] + "..." if len(r.expected) > 50 else r.expected,
+                'Actual': r.actual[:50] + "..." if len(r.actual) > 50 else r.actual,
+            }
+            for r in all_results
+        ])
+        st.dataframe(results_df, use_container_width=True)
 
 # Cleanup
 try:
@@ -410,11 +471,12 @@ except:
 st.markdown("---")
 st.markdown("### About")
 st.markdown("""
-**Email Translation QA Tool** helps you validate multilingual email templates across:
-- **9 Brands**: The Standard, Breathless, Standard X, Me and All, Andaz, Thompson, Dream
-- **6 Reservation Types**: Confirmation, Check In, Check Out, Reservation, Modification, Reminder
-- **Key Sections**: Hero Section, Reservation Module, Contact Module, WOH Module, App Module, Footer
-- **10+ Languages**: Compare translations effortlessly
+**Email Translation QA Tool** helps you validate multilingual email templates by:
+1. **Uploading EML files** - Your email templates
+2. **Uploading Excel translations** - Your expected translation base
+3. **Manually selecting sections** - Choose which parts to compare
+4. **Mapping columns** - Link Excel columns to email sections
+5. **Viewing results** - See similarity scores and export reports
 
-Upload your emails and translation base to get started!
+Supports all 9 brands and 6 reservation types!
 """)
